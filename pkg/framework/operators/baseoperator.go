@@ -73,6 +73,10 @@ type BaseOperator struct {
 	yamls             [][]byte
 	customCommand     string
 	deploymentConfig  appsv1.Deployment
+	namespaceConfig   corev1.Namespace
+	configMap         corev1.ConfigMap
+	secret            corev1.Secret
+	service           corev1.Service
 	serviceAccount    corev1.ServiceAccount
 	role              rbacv1.Role
 	cRole             rbacv1.ClusterRole
@@ -305,6 +309,9 @@ func (b *BaseOperator) setupServiceAccount(jsonObj []byte) {
 	if err := json.Unmarshal(jsonObj, &b.serviceAccount); err != nil {
 		b.errorItemLoad("service account", jsonObj, err)
 	}
+	if b.namespace != "" {
+		b.serviceAccount.ObjectMeta.Namespace = b.namespace
+	}
 	if _, err := b.kubeClient.CoreV1().ServiceAccounts(b.namespace).Create(&b.serviceAccount); err != nil {
 		b.errorItemCreate("service account", err)
 	}
@@ -316,6 +323,9 @@ func (b *BaseOperator) setupRole(jsonObj []byte) {
 
 	if err := json.Unmarshal(jsonObj, &b.role); err != nil {
 		b.errorItemLoad("role", jsonObj, err)
+	}
+	if b.namespace != "" {
+		b.role.ObjectMeta.Namespace = b.namespace
 	}
 	for _, item := range b.role.Rules {
 		log.Logf("Rule concerning %v is being created", item.Resources)
@@ -330,6 +340,9 @@ func (b *BaseOperator) setupClusterRole(jsonObj []byte) {
 	if err := json.Unmarshal(jsonObj, &b.cRole); err != nil {
 		b.errorItemLoad("cluster role", jsonObj, err)
 	}
+	if b.namespace != "" {
+		b.cRole.ObjectMeta.Namespace = b.namespace
+	}
 
 	// Ignore errors if cluster level resource already exists
 	if _, err := b.kubeClient.RbacV1().ClusterRoles().Create(&b.cRole); err != nil {
@@ -343,6 +356,9 @@ func (b *BaseOperator) setupRoleBinding(jsonObj []byte) {
 		b.errorItemLoad("role binding", jsonObj, err)
 	}
 	b.roleBinding.Name = "rolebinding-" + util.String(8) //silly.
+	if b.namespace != "" {
+		b.roleBinding.ObjectMeta.Namespace = b.namespace
+	}
 	if _, err := b.kubeClient.RbacV1().RoleBindings(b.namespace).Create(&b.roleBinding); err != nil {
 		b.errorItemCreate("role binding", err)
 	}
@@ -352,6 +368,9 @@ func (b *BaseOperator) setupClusterRoleBinding(jsonObj []byte) {
 	log.Logf("Setting up Cluster Role Binding")
 	if err := json.Unmarshal(jsonObj, &b.cRoleBinding); err != nil {
 		b.errorItemLoad("cluster role binding", jsonObj, err)
+	}
+	if b.namespace != "" {
+		b.cRoleBinding.ObjectMeta.Namespace = b.namespace
 	}
 	if _, err := b.kubeClient.RbacV1().ClusterRoleBindings().Create(&b.cRoleBinding); err != nil {
 		b.errorItemCreate("cluster role binding", err)
@@ -410,8 +429,24 @@ func (b *BaseOperator) createKubeObject(jsonItem []byte) error {
 		b.setupCRD(jsonItem)
 	case "Deployment":
 		b.setupDeployment(jsonItem)
+	case "Namespace":
+		b.setupNamespace(jsonItem)
+	case "ConfigMap":
+		b.setupConfigMap(jsonItem)
+	case "Secret":
+		b.setupSecret(jsonItem)
+	case "Service":
+		b.setupService(jsonItem)
 	default:
-		return fmt.Errorf("can't find item type %s", def.Kind)
+		fmt.Printf("can't find custom setup for item type %s\n", def.Kind)
+
+		yaml, err := yaml.JSONToYAML(jsonItem)
+		if err != nil {
+			b.errorItemLoad(def.Kind+" (json to yaml)", jsonItem, err)
+		}
+		if err := b.CreateResourcesFromYAMLBytes(yaml); err != nil && !strings.Contains(err.Error(), "already exists") {
+			b.errorItemLoad(def.Kind, yaml, err)
+		}
 	}
 	return nil
 }
@@ -447,6 +482,9 @@ func (b *BaseOperator) setupDeployment(jsonItem []byte) {
 	if err := json.Unmarshal(jsonItem, &b.deploymentConfig); err != nil {
 		b.errorItemLoad("deployment", jsonItem, err)
 	}
+	if b.namespace != "" {
+		b.deploymentConfig.ObjectMeta.Namespace = b.namespace
+	}
 	if b.image != "" {
 		//Customize the spec if that is requested
 		b.deploymentConfig.Spec.Template.Spec.Containers[0].Image = b.image
@@ -475,6 +513,59 @@ func (b *BaseOperator) setupDeployment(jsonItem []byte) {
 	}
 	if _, err := b.kubeClient.AppsV1().Deployments(b.namespace).Create(&b.deploymentConfig); err != nil {
 		b.errorItemCreate("deployment", err)
+	}
+}
+
+func (b *BaseOperator) setupNamespace(jsonItem []byte) {
+	log.Logf("Setting up Namespace")
+	if err := json.Unmarshal(jsonItem, &b.namespaceConfig); err != nil {
+		b.errorItemLoad("namespace", jsonItem, err)
+	}
+	if b.namespace != "" {
+		//Customize the namespace name if that is requested
+		b.namespaceConfig.Name = b.namespace
+	}
+	if _, err := b.kubeClient.CoreV1().Namespaces().Create(&b.namespaceConfig); err != nil {
+		b.errorItemCreate("namespace", err)
+	}
+}
+
+func (b *BaseOperator) setupConfigMap(jsonItem []byte) {
+	log.Logf("Setting up ConfigMap")
+	if err := json.Unmarshal(jsonItem, &b.configMap); err != nil {
+		b.errorItemLoad("configMap", jsonItem, err)
+	}
+	if b.namespace != "" {
+		b.configMap.ObjectMeta.Namespace = b.namespace
+	}
+	if _, err := b.kubeClient.CoreV1().ConfigMaps(b.namespace).Create(&b.configMap); err != nil {
+		b.errorItemCreate("namespace", err)
+	}
+}
+
+func (b *BaseOperator) setupSecret(jsonItem []byte) {
+	log.Logf("Setting up Secret")
+	if err := json.Unmarshal(jsonItem, &b.secret); err != nil {
+		b.errorItemLoad("secret", jsonItem, err)
+	}
+	if b.namespace != "" {
+		b.secret.ObjectMeta.Namespace = b.namespace
+	}
+	if _, err := b.kubeClient.CoreV1().Secrets(b.namespace).Create(&b.secret); err != nil {
+		b.errorItemCreate("secret", err)
+	}
+}
+
+func (b *BaseOperator) setupService(jsonItem []byte) {
+	log.Logf("Setting up Service")
+	if err := json.Unmarshal(jsonItem, &b.service); err != nil {
+		b.errorItemLoad("service", jsonItem, err)
+	}
+	if b.namespace != "" {
+		b.service.ObjectMeta.Namespace = b.namespace
+	}
+	if _, err := b.kubeClient.CoreV1().Services(b.namespace).Create(&b.service); err != nil {
+		b.errorItemCreate("service", err)
 	}
 }
 
